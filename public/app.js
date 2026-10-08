@@ -1,287 +1,31 @@
-const socket = io();
-
-let player = null;
-let playerReady = false;
-let isHost = false;
-let partyState = null;
-let applyingRemote = false;
-let syncTimer = null;
-
-const $ = id => document.getElementById(id);
-
-function show(id) {
-  $(id).classList.remove("hidden");
-}
-function hide(id) {
-  $(id).classList.add("hidden");
-}
-function toast(text) {
-  const el = $("toast");
-  el.textContent = text;
-  el.classList.add("show");
-  clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => el.classList.remove("show"), 2200);
-}
-
-function saveName() {
-  return ($("nameInput").value || "").trim() || "Guest";
-}
-
-function extractVideoId(input) {
-  const value = String(input || "").trim();
-  if (/^[a-zA-Z0-9_-]{11}$/.test(value)) return value;
-  try {
-    const url = new URL(value);
-    if (url.hostname.includes("youtu.be")) return url.pathname.slice(1).split("/")[0];
-    if (url.hostname.includes("youtube.com")) {
-      if (url.searchParams.get("v")) return url.searchParams.get("v");
-      const parts = url.pathname.split("/").filter(Boolean);
-      const i = parts.findIndex(x => ["embed", "shorts", "live"].includes(x));
-      if (i >= 0 && parts[i + 1]) return parts[i + 1];
-    }
-  } catch {}
-  return null;
-}
-
-function createPlayer(videoId = "") {
-  if (!window.YT || !YT.Player) return;
-  if (player) {
-    player.destroy();
-    player = null;
-  }
-  player = new YT.Player("player", {
-    videoId,
-    playerVars: {
-      autoplay: 0,
-      controls: 1,
-      playsinline: 1,
-      rel: 0,
-      modestbranding: 1
-    },
-    events: {
-      onReady: () => {
-        playerReady = true;
-        applyState();
-      },
-      onStateChange: event => {
-        if (!isHost || applyingRemote) return;
-        if (event.data === YT.PlayerState.PLAYING) {
-          sendSync();
-        } else if (event.data === YT.PlayerState.PAUSED) {
-          sendSync();
-        }
-      }
-    }
-  });
-}
-
-window.onYouTubeIframeAPIReady = () => {
-  if ($("partyScreen") && !$("partyScreen").classList.contains("hidden")) createPlayer();
-};
-
-function showParty(state) {
-  partyState = state;
-  hide("homeScreen");
-  show("partyScreen");
-  $("leaveBtn").classList.remove("hidden");
-  $("copyCodeBtn").firstChild.textContent = state.code + " ";
-  renderParticipants(state);
-  setHost(state.hostId === socket.id);
-  if (!player && window.YT) createPlayer(state.videoId || "");
-  applyState();
-}
-
-function setHost(value) {
-  isHost = value;
-  $("roleBadge").textContent = value ? "Host" : "Guest";
-  value ? show("hostControls") : hide("hostControls");
-  $("videoInput").disabled = !value;
-}
-
-function renderParticipants(state) {
-  $("count").textContent = state.participants.length;
-  $("participants").innerHTML = state.participants.map(p => `
-    <div class="person">
-      <div class="avatar">${escapeHtml(p.name.slice(0,1).toUpperCase())}</div>
-      <div class="person-name">${escapeHtml(p.name)}</div>
-      ${p.isHost ? '<div class="host-dot">HOST</div>' : ''}
-    </div>
-  `).join("");
-}
-
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, c => ({
-    "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#039;"
-  }[c]));
-}
-
-function applyState() {
-  if (!partyState || !playerReady || !player) return;
-
-  const videoId = partyState.videoId;
-  if (!videoId) {
-    $("playerPlaceholder").classList.remove("hidden");
-    return;
-  }
-
-  $("playerPlaceholder").classList.add("hidden");
-
-  const currentId = player.getVideoData?.().video_id;
-  if (currentId !== videoId) {
-    applyingRemote = true;
-    player.cueVideoById(videoId);
-    setTimeout(() => {
-      if (!player) return;
-      player.seekTo(partyState.position || 0, true);
-      if (partyState.playing) player.playVideo();
-      else player.pauseVideo();
-      applyingRemote = false;
-    }, 400);
-    return;
-  }
-
-  const desired = Number(partyState.position || 0);
-  const actual = Number(player.getCurrentTime?.() || 0);
-  if (Math.abs(actual - desired) > 1.8) {
-    applyingRemote = true;
-    player.seekTo(desired, true);
-    setTimeout(() => applyingRemote = false, 250);
-  }
-
-  applyingRemote = true;
-  if (partyState.playing && player.getPlayerState() !== YT.PlayerState.PLAYING) player.playVideo();
-  if (!partyState.playing && player.getPlayerState() === YT.PlayerState.PLAYING) player.pauseVideo();
-  setTimeout(() => applyingRemote = false, 250);
-}
-
-function sendSync() {
-  if (!isHost || !player || !playerReady || !partyState?.videoId) return;
-  socket.emit("party:sync", {
-    videoId: partyState.videoId,
-    position: player.getCurrentTime(),
-    playing: player.getPlayerState() === YT.PlayerState.PLAYING
-  });
-}
-
-$("createBtn").onclick = () => {
-  $("homeError").textContent = "";
-  socket.emit("party:create", { name: saveName() }, result => {
-    if (!result.ok) {
-      $("homeError").textContent = result.error || "Could not create party.";
-      return;
-    }
-    showParty(result.state);
-    toast(`Party ${result.code} created`);
-  });
-};
-
-$("joinBtn").onclick = () => {
-  $("homeError").textContent = "";
-  const code = $("codeInput").value.trim().toUpperCase();
-  if (code.length !== 6) {
-    $("homeError").textContent = "Enter the 6-character party code.";
-    return;
-  }
-  socket.emit("party:join", { code, name: saveName() }, result => {
-    if (!result.ok) {
-      $("homeError").textContent = result.error || "Could not join party.";
-      return;
-    }
-    showParty(result.state);
-    toast(`Joined ${result.code}`);
-  });
-};
-
-$("leaveBtn").onclick = () => {
-  socket.emit("party:leave");
-  partyState = null;
-  playerReady = false;
-  if (player) {
-    player.destroy();
-    player = null;
-  }
-  hide("partyScreen");
-  show("homeScreen");
-  hide("leaveBtn");
-};
-
-$("loadBtn").onclick = () => {
-  const id = extractVideoId($("videoInput").value);
-  if (!id) {
-    toast("That doesn't look like a YouTube video URL.");
-    return;
-  }
-  socket.emit("party:load", { videoId: id });
-};
-
-$("playBtn").onclick = () => {
-  if (!isHost || !player) return;
-  player.playVideo();
-  setTimeout(sendSync, 150);
-};
-
-$("pauseBtn").onclick = () => {
-  if (!isHost || !player) return;
-  player.pauseVideo();
-  setTimeout(sendSync, 150);
-};
-
-$("syncBtn").onclick = () => {
-  if (!isHost) return;
-  sendSync();
-  toast("Playback synced");
-};
-
-$("copyCodeBtn").onclick = async () => {
-  if (!partyState) return;
-  try {
-    await navigator.clipboard.writeText(partyState.code);
-    toast("Party code copied");
-  } catch {
-    toast(partyState.code);
-  }
-};
-
-$("chatForm").onsubmit = e => {
-  e.preventDefault();
-  const input = $("chatInput");
-  const text = input.value.trim();
-  if (!text) return;
-  socket.emit("party:message", { text });
-  input.value = "";
-};
-
-$("nameInput").addEventListener("keydown", e => {
-  if (e.key === "Enter") $("createBtn").click();
-});
-$("codeInput").addEventListener("input", e => {
-  e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
-});
-
-socket.on("party:state", state => {
-  partyState = state;
-  renderParticipants(state);
-  setHost(state.hostId === socket.id);
-  applyState();
-});
-
-socket.on("party:host", ({ isHost: host }) => {
-  setHost(host);
-  toast(host ? "You are now the host" : "Host changed");
-});
-
-socket.on("chat:message", message => {
-  const row = document.createElement("div");
-  row.className = "msg";
-  row.innerHTML = `<div class="msg-name">${escapeHtml(message.name)}</div><div class="msg-text">${escapeHtml(message.text)}</div>`;
-  $("messages").appendChild(row);
-  $("messages").scrollTop = $("messages").scrollHeight;
-});
-
-socket.on("connect", () => {
-  // Socket reconnects do not automatically rejoin; the user can rejoin from home.
-});
-
-setInterval(() => {
-  if (isHost && playerReady && partyState?.videoId) sendSync();
-}, 3000);
+const socket=io();let player=null,playerReady=false,isHost=false,state=null,remote=false,installPrompt=null;
+const $=id=>document.getElementById(id),show=id=>$(id).classList.remove('hidden'),hide=id=>$(id).classList.add('hidden');
+function toast(t){const e=$('toast');e.textContent=t;e.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('show'),2200)}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]))}
+function name(){return ($('nameInput').value||'').trim()||'Guest'}
+function videoId(v){v=String(v||'').trim();if(/^[\w-]{11}$/.test(v))return v;try{const u=new URL(v);if(u.hostname.includes('youtu.be'))return u.pathname.split('/').filter(Boolean)[0]||null;if(u.hostname.includes('youtube.com'))return u.searchParams.get('v')||(()=>{const p=u.pathname.split('/').filter(Boolean),i=p.findIndex(x=>['embed','shorts','live'].includes(x));return i>=0?p[i+1]:null})()}catch{}return null}
+function renderPeople(){const ps=state?.participants||[];$('count').textContent=ps.length;$('memberSummary').textContent=`${ps.length} ${ps.length===1?'person':'people'}`;$('participants').innerHTML=ps.map(p=>`<div class="person"><div class="avatar">${esc(p.name[0]?.toUpperCase()||'G')}</div><div class="person-name">${esc(p.name)}</div>${p.isHost?'<span class="host-label">HOST</span>':''}</div>`).join('')}
+function addMessage(m){const e=document.createElement('div');e.className='msg';e.innerHTML=`<div class="msg-name">${esc(m.name)}</div><div class="msg-text">${esc(m.text)}</div>`;$('messages').appendChild(e);$('messages').scrollTop=$('messages').scrollHeight}
+function renderMessages(ms=[]){$('messages').innerHTML='';ms.forEach(addMessage)}
+function setHost(v){isHost=!!v;$('roleBadge').textContent=isHost?'Host':'Guest';isHost?show('hostControls'):hide('hostControls')}
+function openParty(s){state=s;hide('homeScreen');show('partyScreen');show('leaveBtn');$('copyCodeBtn').textContent=s.code;history.replaceState(null,'',`/?party=${s.code}`);document.title=`Party ${s.code} · YT Watch Party`;setHost(s.hostId===socket.id);renderPeople();renderMessages(s.messages||[]);if(!player&&window.YT)makePlayer(s.videoId)}
+function makePlayer(id=''){if(!window.YT?.Player||player)return;player=new YT.Player('player',{videoId:id,playerVars:{autoplay:0,controls:1,playsinline:1,rel:0,modestbranding:1,origin:location.origin},events:{onReady:()=>{playerReady=true;apply(true)},onStateChange:e=>{if(isHost&&!remote&&state?.videoId&&(e.data===YT.PlayerState.PLAYING||e.data===YT.PlayerState.PAUSED))sync()}}})}
+window.onYouTubeIframeAPIReady=()=>{if(!$('partyScreen').classList.contains('hidden'))makePlayer(state?.videoId||'')};
+function apply(force=false){if(!state||!playerReady||!player)return;if(!state.videoId){show('playerPlaceholder');return}hide('playerPlaceholder');const cur=player.getVideoData?.().video_id||'';if(cur!==state.videoId){remote=true;player.cueVideoById(state.videoId);setTimeout(()=>{if(!player)return;player.seekTo(state.position||0,true);state.playing?player.playVideo():player.pauseVideo();remote=false},450);return}const target=Number(state.position||0),actual=Number(player.getCurrentTime?.()||0);if(force||Math.abs(actual-target)>1.7){remote=true;player.seekTo(target,true);setTimeout(()=>{if(!player)return;state.playing?player.playVideo():player.pauseVideo();remote=false;flash()},150)}else if(state.playing&&player.getPlayerState()!==YT.PlayerState.PLAYING){remote=true;player.playVideo();setTimeout(()=>remote=false,250)}else if(!state.playing&&player.getPlayerState()===YT.PlayerState.PLAYING){remote=true;player.pauseVideo();setTimeout(()=>remote=false,250)}}
+function flash(){show('syncBadge');clearTimeout(flash.t);flash.t=setTimeout(()=>hide('syncBadge'),900)}
+function sync(){if(!isHost||!playerReady||!player||!state?.videoId)return;socket.emit('party:sync',{videoId:state.videoId,position:player.getCurrentTime(),playing:player.getPlayerState()===YT.PlayerState.PLAYING})}
+function join(code){code=String(code||'').toUpperCase().replace(/[^A-Z0-9]/g,'');if(code.length!==6){$('homeError').textContent='Enter the 6-character party code.';return}socket.emit('party:join',{code,name:name()},r=>{if(!r.ok){$('homeError').textContent=r.error;return}openParty(r.state);toast('Joined the party')})}
+$('createBtn').onclick=()=>socket.emit('party:create',{name:name()},r=>{if(!r.ok)return $('homeError').textContent=r.error||'Could not create party';openParty(r.state);toast(`Party ${r.state.code} created`)});
+$('joinBtn').onclick=()=>join($('codeInput').value);$('codeInput').oninput=e=>e.target.value=e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,'');$('codeInput').onkeydown=e=>e.key==='Enter'&&join(e.target.value);$('nameInput').onkeydown=e=>e.key==='Enter'&&$('createBtn').click();
+$('leaveBtn').onclick=()=>{socket.emit('party:leave');if(player){player.destroy();player=null}state=null;playerReady=false;isHost=false;hide('partyScreen');hide('leaveBtn');show('homeScreen');history.replaceState(null,'','/');document.title='YT Watch Party'};
+$('loadBtn').onclick=()=>{const id=videoId($('videoInput').value);if(!id)return toast('Paste a valid YouTube URL or video ID');socket.emit('party:load',{videoId:id});$('videoInput').value=''};$('videoInput').onkeydown=e=>e.key==='Enter'&&$('loadBtn').click();
+$('playBtn').onclick=()=>{if(isHost){player.playVideo();setTimeout(sync,200)}};$('pauseBtn').onclick=()=>{if(isHost){player.pauseVideo();setTimeout(sync,200)}};$('syncBtn').onclick=()=>{sync();toast('Party synced')};
+async function copy(t){try{await navigator.clipboard.writeText(t)}catch{const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();document.execCommand('copy');a.remove()}}
+$('copyCodeBtn').onclick=async()=>{await copy(state.code);toast('Party code copied')};$('shareBtn').onclick=async()=>{const url=`${location.origin}/?party=${state.code}`;if(navigator.share){try{await navigator.share({title:'Join my YT Watch Party',text:`Join my Watch Party: ${state.code}`,url});return}catch{}}await copy(url);toast('Invite link copied')};
+$('renameBtn').onclick=()=>{const n=prompt('Choose a display name',name());if(n?.trim()){$('nameInput').value=n.trim().slice(0,24);socket.emit('party:rename',{name:$('nameInput').value})}};
+$('chatForm').onsubmit=e=>{e.preventDefault();const i=$('chatInput'),t=i.value.trim();if(t)socket.emit('party:message',{text:t});i.value=''};
+socket.on('party:state',s=>{state=s;setHost(s.hostId===socket.id);renderPeople();renderMessages(s.messages||[]);apply()});socket.on('party:role',r=>{setHost(r.isHost);toast(r.isHost?'You are now the host':'Host changed')});socket.on('chat:message',addMessage);socket.on('connect',()=>{ $('connectionStatus').innerHTML='<span></span> Connected';$('connectionStatus').classList.remove('offline')});socket.on('disconnect',()=>{$('connectionStatus').innerHTML='<span></span> Reconnecting…';$('connectionStatus').classList.add('offline')});
+setInterval(()=>{if(!isHost&&state?.videoId)apply()},2500);window.addEventListener('beforeunload',()=>socket.emit('party:leave'));
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;show('installBtn')});$('installBtn').onclick=async()=>{if(!installPrompt)return;installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;hide('installBtn')};
+if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));
+const invite=new URLSearchParams(location.search).get('party');if(invite){$('codeInput').value=invite.toUpperCase();$('homeError').textContent='Enter your name, then tap Join.'}

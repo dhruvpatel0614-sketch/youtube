@@ -6,12 +6,13 @@
   <meta name="theme-color" content="#0f0f0f">
   <title>YT Watch Party</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="manifest" href="/manifest.webmanifest">
 </head>
 <body>
   <div class="app">
     <header class="topbar">
       <div class="brand"><span class="brand-mark">▶</span><span>YT Watch Party</span></div>
-      <button id="leaveBtn" class="ghost hidden">Leave</button>
+      <div class="top-actions"><button id="installBtn" class="ghost hidden">Install</button><button id="leaveBtn" class="ghost hidden">Leave</button></div>
     </header>
 
     <main>
@@ -42,7 +43,8 @@
         <div class="party-head">
           <div>
             <div class="eyebrow">PARTY CODE</div>
-            <button id="copyCodeBtn" class="code">------ <span>Copy</span></button>
+            <div class="code-line"><button id="copyCodeBtn" class="code">------</button><button id="shareBtn" class="share-button">Share</button></div>
+            <div id="connectionStatus" class="connection"><span></span> Connected</div>
           </div>
           <div id="roleBadge" class="badge">Guest</div>
         </div>
@@ -53,8 +55,7 @@
             <div class="play-icon">▶</div>
             <p>Ask the host to load a YouTube video.</p>
           </div>
-        </div>
-
+        <div id="syncBadge" class="sync-badge hidden">Synced</div></div>
         <div id="hostControls" class="card host-controls hidden">
           <div class="control-title">Host controls</div>
           <div class="video-row">
@@ -67,6 +68,8 @@
             <button id="syncBtn" class="secondary">↻ Sync</button>
           </div>
         </div>
+
+        <div class="toolbar card"><div><strong id="partyTitle">Party</strong> <span id="memberSummary">0 people</span></div><button id="renameBtn" class="secondary small">Rename</button></div>
 
         <div class="grid">
           <section class="card">
