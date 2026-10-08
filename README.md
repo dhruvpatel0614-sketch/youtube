@@ -1,66 +1,45 @@
-# YT Watch Party — Web App
+# YT Watch Party — Final Web Release
 
-A mobile-first YouTube Watch Party built with Node.js, Express and Socket.IO.
+A mobile-first YouTube Watch Party using Node.js, Express, Socket.IO and the official YouTube IFrame Player API.
 
-## Features
+## Included
+- 6-character private rooms
+- Shareable `/?party=ABC123` invite links
+- Copy/share party link
+- Host-only video loading and playback controls
+- Server-timestamped sync with periodic guest drift correction
+- Automatic host handoff
+- Live participants and real-time chat
+- Rename yourself
+- Mobile-first UI
+- Installable PWA shell
+- `/health` endpoint
+- Render deployment config
 
-- Create a private 6-character party
-- Join from another phone or computer
-- YouTube IFrame playback
-- Host loads videos from a YouTube URL or video ID
-- Host play/pause/seek synchronization
-- Automatic playback correction for guests
-- Live participant list
-- Real-time party chat
-- Host handoff when the host leaves
-- Responsive mobile UI
-- No Android Studio, Kotlin or Gradle required
-
-## Requirements
-
-- Node.js 18+
-- A modern browser
-- Internet access for the YouTube IFrame Player API
-
-## Run locally
-
+## Run
 ```bash
 npm install
 npm start
 ```
+Open `http://localhost:3000`.
 
-Then open:
+## Render
+Create a Web Service from this repository. Build command: `npm install`. Start command: `npm start`. The included `render.yaml` can also be used with Render Blueprint deployment. Render supplies `PORT` automatically.
 
-http://localhost:3000
-
-## Test with friends on the same Wi-Fi
-
-Find the computer's local IP address.
-
-Windows:
-
-```bat
-ipconfig
-```
-
-Look for an IPv4 address such as `192.168.1.20`.
-
-Friends on the same Wi-Fi can open:
-
+## GitHub structure
 ```text
-http://192.168.1.20:3000
+package.json
+server.js
+render.yaml
+README.md
+public/
+  index.html
+  app.js
+  styles.css
+  manifest.webmanifest
+  sw.js
+  icon.svg
 ```
 
-If Windows Firewall asks, allow Node.js on your private network.
-
-## Deploy online
-
-This app needs a Node.js server with WebSocket support. Deploy the folder to a Node-compatible host and set the `PORT` environment variable if your provider requires it.
-
-The app is intentionally server-rendered/static on the frontend and uses Socket.IO for real-time room state.
-
-## Important YouTube note
-
-This app uses the official YouTube IFrame Player API. It does not download, proxy, or redistribute YouTube videos.
-
-For a production deployment, add authentication, rate limiting, persistent storage if needed, moderation controls, and HTTPS.
+## Note
+Rooms are held in server memory. For a large production service, add authentication, persistent/shared state (for example Redis), rate limiting and moderation. YouTube video playback is provided by the official YouTube player; videos are not downloaded or proxied.

@@ -38,9 +38,10 @@ function roomState(room) {
     code: room.code,
     hostId: room.hostId,
     videoId: room.videoId,
-    position: room.position,
+    position: room.playing ? room.position + Math.max(0, (Date.now() - room.updatedAt) / 1000) : room.position,
     playing: room.playing,
     updatedAt: room.updatedAt,
+    messages: room.messages.slice(-60),
     participants: [...room.participants.values()].map(p => ({
       id: p.id,
       name: p.name,
@@ -62,7 +63,8 @@ function createRoom() {
     position: 0,
     playing: false,
     updatedAt: Date.now(),
-    participants: new Map()
+    participants: new Map(),
+    messages: []
   };
   rooms.set(code, room);
   return room;
@@ -174,6 +176,25 @@ io.on("connection", socket => {
   });
 
   socket.on("party:name", ({ name } = {}) => {
+    const room = rooms.get(socket.data.roomCode);
+    if (!room || !room.participants.has(socket.id)) return;
+    room.participants.get(socket.id).name = cleanName(name);
+    broadcastState(room);
+  });
+
+  socket.on("party:message", ({ text } = {}) => {
+    const room = rooms.get(socket.data.roomCode);
+    if (!room || !room.participants.has(socket.id)) return;
+    const value = String(text || "").trim().slice(0, 500);
+    if (!value) return;
+    const person = room.participants.get(socket.id);
+    const message = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name: person.name, text: value, at: Date.now() };
+    room.messages.push(message);
+    room.messages = room.messages.slice(-60);
+    io.to(room.code).emit("chat:message", message);
+  });
+
+  socket.on("party:rename", ({ name } = {}) => {
     const room = rooms.get(socket.data.roomCode);
     if (!room || !room.participants.has(socket.id)) return;
     room.participants.get(socket.id).name = cleanName(name);
